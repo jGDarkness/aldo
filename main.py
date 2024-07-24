@@ -1,5 +1,5 @@
 import json   
-from PyQt6.QtCore import Qt, QUrl
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QPalette, QColor
 from PyQt6.QtWidgets import (
     QApplication, 
@@ -11,9 +11,12 @@ from PyQt6.QtWidgets import (
     QWidget
 )
 from PyQt6.QtWebEngineWidgets import QWebEngineView
-from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium import webdriver
 import sys
 
 
@@ -28,7 +31,6 @@ import sys
 '''
 
 
-
 class MainWindow(QMainWindow):
     def __init__(self):
         '''
@@ -40,11 +42,11 @@ class MainWindow(QMainWindow):
         # WINDOW SETTINGS
         self.setWindowTitle("Aldo - Audible.com Library Downloader for Obsidian")
         self.setObjectName("Main_Window")
-        screen = QApplication.primaryScreen().geometry()
+        self.screen = QApplication.primaryScreen().geometry()
         window_width = 1500
         window_height = 800
-        x = (screen.width() - window_width) // 2
-        y = (screen.height() - window_height) // 2
+        x = (self.screen.width() - window_width) // 2
+        y = (self.screen.height() - window_height) // 2
         self.setGeometry(x, y, window_width, window_height)
 
 
@@ -62,9 +64,6 @@ class MainWindow(QMainWindow):
         three_column_splitter.setObjectName("Three_Column_Layout")
         three_column_splitter.setHandleWidth(2)
         three_column_splitter.setChildrenCollapsible(False)
-        three_column_splitter.setStretchFactor(0, 10)
-        three_column_splitter.setStretchFactor(1, 60)
-        three_column_splitter.setStretchFactor(2, 30)
         layout.addWidget(three_column_splitter)
 
 
@@ -100,7 +99,8 @@ class MainWindow(QMainWindow):
         """)                
         home_button.setFixedHeight(45)
         home_button.setFixedWidth(225)
-        home_button.clicked.connect(self.show_home_content)        
+        home_button.clicked.connect(self.show_home_content)
+        home_button.clicked.connect(lambda: self.statusBar().showMessage("Home"))        
         navigation_layout.addWidget(home_button)
 
 
@@ -121,6 +121,7 @@ class MainWindow(QMainWindow):
         credentials_button.setFixedHeight(45)
         credentials_button.setFixedWidth(225)
         credentials_button.clicked.connect(self.show_credentials_content)
+        credentials_button.clicked.connect(lambda: self.statusBar().showMessage("Viewing/editing credentials."))
         navigation_layout.addWidget(credentials_button)
 
 
@@ -141,6 +142,7 @@ class MainWindow(QMainWindow):
         settings_button.setFixedHeight(45)
         settings_button.setFixedWidth(225)
         settings_button.clicked.connect(self.show_settings_content)
+        settings_button.clicked.connect(lambda: self.statusBar().showMessage("Viewing/editing settings."))
         navigation_layout.addWidget(settings_button)
 
 
@@ -173,6 +175,7 @@ class MainWindow(QMainWindow):
         self.logging_layout.setContentsMargins(10, 10, 10, 10)
         self.logging_layout.setSpacing(10)
         self.logging_layout.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        self.logging_content.setFixedWidth(325)
         self.logging_content.setLayout(self.logging_layout)
         three_column_splitter.addWidget(self.logging_content)
 
@@ -206,7 +209,7 @@ class MainWindow(QMainWindow):
         self.clear_logging_content()
         home_label = QLabel("Welcome to Aldo!")
         home_label.setStyleSheet("""
-            font-size: 14pt;
+            font-size: 12pt;
             border-top: 0px;
             border-right: 0px;
             border-left: 0px;
@@ -224,7 +227,7 @@ class MainWindow(QMainWindow):
         # Add widgets for credentials content
         credentials_label = QLabel("Enter or adjust your credentials")
         credentials_label.setStyleSheet("""
-            font-size: 14pt;
+            font-size: 12pt;
             border-top: 0px;
             border-right: 0px;
             border-left: 0px;
@@ -243,7 +246,7 @@ class MainWindow(QMainWindow):
         self.clear_logging_content()
         settings_label = QLabel("Adjust your settings")
         settings_label.setStyleSheet("""
-            font-size: 14pt;
+            font-size: 12pt;
             border-top: 0px;
             border-right: 0px;
             border-left: 0px;
@@ -258,18 +261,24 @@ class MainWindow(QMainWindow):
 
 
     def initialize_browser(self):
+        web_view = QWebEngineView()
+        web_view.setZoomFactor(0.5)  # Set zoom factor to 50%
+        web_view.loadStarted.connect(lambda: self.statusBar().showMessage("Loading Audible..."))
+
         chrome_options = Options()
-        service = Service() 
         chrome_options.add_argument("--headless")
+        service = Service()
         self.driver = webdriver.Chrome(service=service, options=chrome_options)
-        self.web_view = QWebEngineView()
-        self.web_view.setUrl(QUrl("https://www.audible.com"))
-        self.web_view.setZoomFactor(0.60)
+        self.driver.get("https://www.audible.com")
+
         for i in reversed(range(self.central_widget_content.layout().count())):
             self.central_widget_content.layout().itemAt(i).widget().setParent(None)
-        self.central_widget_content.layout().addWidget(self.web_view)
+        self.central_widget_content.layout().addWidget(web_view)
+    
+        web_view.setHtml(self.driver.page_source)
+        web_view.loadFinished.connect(lambda: self.statusBar().showMessage("Loading Audible... Done!"))
 
-
+        
 
 def main():
     '''
