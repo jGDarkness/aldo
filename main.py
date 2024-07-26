@@ -1,5 +1,8 @@
 import json   
-from PyQt6.QtCore import Qt, QTimer
+import logging
+import os
+from PyQt6 import QtCore
+from PyQt6.QtCore import Qt, QRunnable, QThreadPool, pyqtSignal, QObject
 from PyQt6.QtGui import QPalette, QColor
 from PyQt6.QtWidgets import (
     QApplication, 
@@ -29,6 +32,54 @@ import sys
     By: jGDarkenss@github.com
     Date: July 2024
 '''
+
+
+
+class JSONStreamHandler(logging.StreamHandler):
+    '''
+    This class is used to write logs to a JSON file.
+    '''
+    def emit(self, record):
+        log_entry = {
+            'timestamp': self.formatter.formatTime(record),
+            'level': record.levelname,
+            'message': self.format(record)
+        }
+        json.dump(log_entry, self.stream)
+        self.stream.write('\n')
+        self.flush()
+
+
+
+class Worker(QRunnable):
+    '''
+    This class is used to run the web driver and load the Audible page.
+    '''
+    class Signals(QObject):
+        '''
+        This class is used to emit signals from the worker thread.
+        '''
+        finished = pyqtSignal(str)
+
+
+    def __init__(self, fn, *args, **kwargs):
+        '''
+        Initialize the worker thread.
+        '''
+        super().__init__()
+        self.fn = fn
+        self.args = args
+        self.kwargs = kwargs
+        self.signals = Worker.Signals()
+
+
+    def run(self):
+        '''
+        Run the web driver and load the Audible page.
+        '''
+        result = self.fn(*self.args, **self.kwargs)
+        self.signals.finished.emit(result)
+
 
 
 class MainWindow(QMainWindow):
@@ -121,7 +172,8 @@ class MainWindow(QMainWindow):
         credentials_button.setFixedHeight(45)
         credentials_button.setFixedWidth(225)
         credentials_button.clicked.connect(self.show_credentials_content)
-        credentials_button.clicked.connect(lambda: self.statusBar().showMessage("Viewing/editing credentials."))
+        credentials_button.clicked.connect(
+            lambda: self.statusBar().showMessage("Viewing/editing credentials."))
         navigation_layout.addWidget(credentials_button)
 
 
@@ -142,7 +194,8 @@ class MainWindow(QMainWindow):
         settings_button.setFixedHeight(45)
         settings_button.setFixedWidth(225)
         settings_button.clicked.connect(self.show_settings_content)
-        settings_button.clicked.connect(lambda: self.statusBar().showMessage("Viewing/editing settings."))
+        settings_button.clicked.connect(
+            lambda: self.statusBar().showMessage("Viewing/editing settings."))
         navigation_layout.addWidget(settings_button)
 
 
@@ -190,9 +243,100 @@ class MainWindow(QMainWindow):
         status_bar.setPalette(status_palette)
 
 
-        # LOAD DEFAULT VIEW
-        self.show_home_content()
-        self.initialize_browser()
+        # Set up Selenium Logging
+        self.log_path = os.path.join('logs', 'chrome_logs.json')
+        if not os.path.exists('logs'):
+            os.makedirs('logs')
+        if not os.path.exists(self.log_path):
+            with open(self.log_path, 'w') as f:
+                json.dump({}, f)
+        self.log_file = open(self.log_path, 'a')
+        json_handler = JSONStreamHandler(self.log_file)
+        json_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+        root_logger = logging.getLogger()
+        root_logger.setLevel(logging.DEBUG)
+        root_logger.addHandler(json_handler)
+        sys.stdout = root_logger.handlers[0].stream
+        sys.stderr = root_logger.handlers[0].stream
+
+ 
+        # Set up Chrome Options
+        chrome_options = Options()
+        chrome_options.add_argument("--headless")
+        chrome_options.add_argument("--silent")
+        chrome_options.add_argument("--log-level=3")
+        chrome_options.add_argument(f"--output={self.log_path}")
+        chrome_options.set_capability('goog:loggingPrefs', {'browser': 'ALL'})        
+
+
+        # Set up the web view
+        service = Service()
+        self.driver = webdriver.Chrome(service=service, options=chrome_options)        
+        self.web_view = QWebEngineView()
+
+
+    def append_logs(self):
+        '''
+        Save the Chrome logs to a JSON file.
+        '''
+        browser_logs = self.driver.get_log('browser')
+        for log in browser_logs:
+            logging.info(json.dumps(log))
+
+    
+    def clear_logs(self):
+        '''
+        Clear the Chrome logs.
+        '''
+        self.driver.get_log('browser').clear()
+
+
+    def __del__(self):
+        '''
+        Close the browser and quit the program.
+        '''
+        if hasattr(self, "driver"):
+            self.driver.quit()
+        if hasattr(self, "log_file"):
+            self.log_path.close()
+
+
+    def load_audible_page(self):
+        '''
+        Load the Audible page and return the page source.
+        '''
+        self.driver.get("https://www.audible.com")
+        page_source = self.driver.page_source
+        self.append_logs()
+        self.clear_logs()
+        return page_source
+    
+
+    def update_web_view(self, page_source):
+        '''
+        Update the web view with the page source.
+        '''
+        self.web_view.setHtml(page_source)
+        
+
+    def initialize_browser(self):
+        '''
+        Initialize the browser.
+        '''
+        self.web_view.setZoomFactor(0.5)  # Set zoom factor to 50%
+        self.web_view.loadStarted.connect(
+            lambda: self.statusBar().showMessage("Loading Audible..."))
+
+        worker = Worker(self.load_audible_page)
+        worker.signals.finished.connect(self.update_web_view)
+        QThreadPool.globalInstance().start(worker)
+
+        for i in reversed(range(self.central_widget_content.layout().count())):
+            self.central_widget_content.layout().itemAt(i).widget().setParent(None)
+        self.central_widget_content.layout().addWidget(self.web_view)    
+        self.web_view.loadFinished.connect(
+            lambda: self.statusBar().showMessage("Loading Audible... Done."))
+
 
     def clear_logging_content(self):
         '''
@@ -256,44 +400,28 @@ class MainWindow(QMainWindow):
         """)
 
         # ADD ADDITIONAL WIDGETS AND FUNCTIONALITY HERE
-
         self.logging_layout.addWidget(settings_label)
 
 
-    def initialize_browser(self):
-        web_view = QWebEngineView()
-        web_view.setZoomFactor(0.5)  # Set zoom factor to 50%
-        web_view.loadStarted.connect(lambda: self.statusBar().showMessage("Loading Audible..."))
-
-        chrome_options = Options()
-        chrome_options.add_argument("--headless")
-        service = Service()
-        self.driver = webdriver.Chrome(service=service, options=chrome_options)
-        self.driver.get("https://www.audible.com")
-
-        for i in reversed(range(self.central_widget_content.layout().count())):
-            self.central_widget_content.layout().itemAt(i).widget().setParent(None)
-        self.central_widget_content.layout().addWidget(web_view)
     
-        web_view.setHtml(self.driver.page_source)
-        web_view.loadFinished.connect(lambda: self.statusBar().showMessage("Loading Audible... Done!"))
-
-        
-
 def main():
     '''
     This function is the main entry point for the app.
     '''
-
-    # APP SETTINGS
+    QtCore.qInstallMessageHandler(lambda *args: None)
     app = QApplication(sys.argv)
     app.setObjectName("MANGO")
     app.setStyle("Fusion")
     window = MainWindow()
     window.show()
+    window.show_home_content()
+    window.initialize_browser()
     sys.exit(app.exec())
 
 
 
 if __name__ == "__main__":
+    '''
+    This is the entry point for the app.
+    '''
     main()
